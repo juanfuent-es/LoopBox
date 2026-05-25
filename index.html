@@ -4,44 +4,165 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LoopBox</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./css/style.css" />
   </head>
   <body>
+
+    <!-- ── Side Panel ─────────────────────────────────────── -->
     <aside class="panel">
-      <h1>LoopBox</h1>
-      <div class="controls">
-        <button id="audio-button">Iniciar audio</button>
-        <div class="row">
-          <button id="add-layer">Añadir layer</button>
-          <button id="remove-layer">Eliminar</button>
+      <header class="panel-header">
+        <div class="logo">
+          <span class="logo-main">LOOP</span><span class="logo-accent">BOX</span>
+          <span class="logo-ver">OSC v2.0</span>
         </div>
-        <label>
-          Layer activo
-          <select id="layer-select"></select>
-        </label>
-        <label>
-          Frecuencia (Hz)
-          <input id="freq" type="range" min="20" max="1200" step="1" />
-        </label>
-        <label>
-          Amplitud
-          <input id="amp" type="range" min="0" max="1" step="0.01" />
-        </label>
-        <label>
-          Velocidad
-          <input id="speed" type="range" min="0.1" max="6" step="0.1" />
-        </label>
-        <label>
-          Fase (rad)
-          <input id="phase" type="range" min="0" max="6.283" step="0.01" />
-        </label>
-        <p class="hint">
-          Arrastra dentro del canvas para desplazar fase y construir patrones de
-          interferencia.
-        </p>
-      </div>
+        <button id="audio-btn" class="audio-btn">▶ INICIAR AUDIO</button>
+      </header>
+
+      <section class="layer-section">
+        <div class="section-header">
+          <span class="section-label">// OSCILLATORS</span>
+          <button id="add-layer-btn" class="add-btn">+ ADD</button>
+        </div>
+        <div id="layer-list" class="layer-list"></div>
+      </section>
+
+      <footer class="panel-footer">
+        <p class="hint">↔ Drag canvas → fase &nbsp;·&nbsp; ↕ amplitud</p>
+        <p class="hint">Click layer → editar parámetros</p>
+        <p class="hint dim">Línea blanca = composición final</p>
+      </footer>
     </aside>
+
+    <!-- ── Canvas ─────────────────────────────────────────── -->
     <main id="canvas-root"></main>
+
+    <!-- ── Floating Layer Editor ──────────────────────────── -->
+    <div id="layer-editor" class="layer-editor" role="dialog" aria-label="Editor de capa">
+      <div class="editor-header">
+        <input type="text" id="e-name" class="name-input" placeholder="LAYER NAME" maxlength="20" />
+        <div class="editor-actions">
+          <button id="delete-layer-btn" class="del-btn" title="Eliminar layer">✕ DEL</button>
+          <button id="close-editor-btn" class="close-btn" title="Cerrar">╌</button>
+        </div>
+      </div>
+
+      <div class="editor-body">
+
+        <!-- Wave Type -->
+        <div class="editor-block">
+          <div class="block-label">// WAVE TYPE</div>
+          <div class="wave-selector">
+            <button class="wave-btn active" data-wave="sine" title="Sine">
+              <svg width="42" height="22" viewBox="0 0 42 22" fill="none">
+                <path d="M1,11 C5,1 9,1 13,11 C17,21 21,21 25,11 C29,1 33,1 37,11 C39,16 41,11 41,11"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              <span>SINE</span>
+            </button>
+            <button class="wave-btn" data-wave="square" title="Square">
+              <svg width="42" height="22" viewBox="0 0 42 22" fill="none">
+                <path d="M1,11 L1,3 L11,3 L11,19 L21,19 L21,3 L31,3 L31,19 L41,19 L41,11"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>SQR</span>
+            </button>
+            <button class="wave-btn" data-wave="triangle" title="Triangle">
+              <svg width="42" height="22" viewBox="0 0 42 22" fill="none">
+                <path d="M1,11 L7,3 L17,19 L27,3 L37,19 L43,11"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>TRI</span>
+            </button>
+            <button class="wave-btn" data-wave="sawtooth" title="Sawtooth">
+              <svg width="42" height="22" viewBox="0 0 42 22" fill="none">
+                <path d="M1,19 L11,3 L11,19 L21,3 L21,19 L31,3 L31,19 L41,3"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>SAW</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Color -->
+        <div class="editor-block">
+          <div class="block-label">// COLOR</div>
+          <div class="color-row">
+            <input type="color" id="e-color" class="color-picker" value="#00ff41" />
+            <span class="color-hint">Color de la capa</span>
+          </div>
+        </div>
+
+        <!-- Wave Parameters -->
+        <div class="editor-block">
+          <div class="block-label">// WAVE</div>
+          <div class="slider-row">
+            <span class="s-label">FREQ</span>
+            <input type="range" id="e-freq" min="20" max="1200" step="1" />
+            <span class="s-val" id="e-freq-val">110 Hz</span>
+          </div>
+          <div class="slider-row">
+            <span class="s-label">AMP</span>
+            <input type="range" id="e-amp" min="0" max="1" step="0.01" />
+            <span class="s-val" id="e-amp-val">0.25</span>
+          </div>
+          <div class="slider-row">
+            <span class="s-label">SPEED</span>
+            <input type="range" id="e-speed" min="0.1" max="6" step="0.05" />
+            <span class="s-val" id="e-speed-val">1.00x</span>
+          </div>
+          <div class="slider-row">
+            <span class="s-label">PHASE</span>
+            <input type="range" id="e-phase" min="0" max="6.283" step="0.01" />
+            <span class="s-val" id="e-phase-val">0.00 rad</span>
+          </div>
+        </div>
+
+        <!-- Audio -->
+        <div class="editor-block">
+          <div class="block-label">// AUDIO</div>
+          <div class="slider-row">
+            <span class="s-label">DETUNE</span>
+            <input type="range" id="e-detune" min="-100" max="100" step="1" />
+            <span class="s-val" id="e-detune-val">+0 ¢</span>
+          </div>
+          <div class="slider-row">
+            <span class="s-label">PAN</span>
+            <input type="range" id="e-pan" min="-1" max="1" step="0.01" />
+            <span class="s-val" id="e-pan-val">C</span>
+          </div>
+          <div class="slider-row">
+            <span class="s-label">REVERB</span>
+            <input type="range" id="e-reverb" min="0" max="1" step="0.01" />
+            <span class="s-val" id="e-reverb-val">0%</span>
+          </div>
+        </div>
+
+        <!-- Visual -->
+        <div class="editor-block">
+          <div class="block-label">// VISUAL</div>
+          <div class="slider-row">
+            <span class="s-label">OPACITY</span>
+            <input type="range" id="e-opacity" min="0" max="1" step="0.01" />
+            <span class="s-val" id="e-opacity-val">85%</span>
+          </div>
+          <div class="slider-row">
+            <span class="s-label">WIDTH</span>
+            <input type="range" id="e-thickness" min="0.5" max="4" step="0.1" />
+            <span class="s-val" id="e-thickness-val">1.8px</span>
+          </div>
+          <div class="slider-row">
+            <span class="s-label">GLOW</span>
+            <input type="range" id="e-glow" min="0" max="1" step="0.01" />
+            <span class="s-val" id="e-glow-val">60%</span>
+          </div>
+        </div>
+
+      </div><!-- /.editor-body -->
+    </div><!-- /#layer-editor -->
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/2.0.5/p5.min.js" integrity="sha512-jOTg6ikYiHx1LvbSOucnvZi4shXbaovZ91+rfViIiUFLgAJK+k1oQtGEaLvDB8rsZwEfUksTgmhrxdvEDykuzQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/15.3.5/Tone.js" integrity="sha512-F1myjNkIKU5XJtOs1HXRo/zOjiUsABgFEEGKLx/riwK82jRThZFebEnfF2HWo9eeC+iC1Nwwnn9Vj6OGq+r7rQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="./js/sketch.js"></script>
