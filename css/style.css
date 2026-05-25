@@ -360,6 +360,7 @@ body {
 .wave-selector {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(2, auto);
   gap: 4px;
 }
 
@@ -469,3 +470,44 @@ input[type="range"]::-moz-range-thumb {
 
 input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--border-mid); }
 input[type="range"]::-moz-range-track { height: 2px; background: var(--border-mid); }
+
+/* ── Noise type selector ──────────────────────────────────────── */
+.noise-type-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.noise-selector {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.noise-btn {
+  flex: 1;
+  padding: 4px 4px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+
+.noise-btn:hover {
+  border-color: var(--border-hi);
+  color: var(--text);
+  background: rgba(0, 255, 65, 0.03);
+}
+
+.noise-btn.active {
+  border-color: var(--amber-dim);
+  color: var(--amber);
+  background: rgba(255, 183, 0, 0.07);
+  box-shadow: 0 0 6px rgba(255, 183, 0, 0.1);
+}

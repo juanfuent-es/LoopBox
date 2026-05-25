@@ -47,11 +47,68 @@ class Layer {
     /** Reverb wet mix 0–1 */
     this.reverb  = 0;
 
+    // ── Wave-type-specific params ───────────────────────────────
+    /** Pulse wave duty cycle 0.01–0.99 (fraction of period held high) */
+    this.dutyCycle       = 0.5;
+    /** FM: modulation depth index 0.1–20 */
+    this.modulationIndex = 5;
+    /** FM / AM: harmonicity ratio between carrier and modulator 0.1–10 */
+    this.harmonicity     = 1;
+    /** Noise spectral color: 'white' | 'pink' | 'brown' */
+    this.noiseType       = "white";
+
     // ── Tone.js nodes (internal) ───────────────────────────────
-    this.oscillator = null;
-    this.gain       = null;
-    this.panner     = null;
-    this.reverbNode = null;
+    this.oscillator    = null;
+    this.gain          = null;
+    this.panner        = null;
+    this.reverbNode    = null;
+    /** Tracks which Tone.js oscillator class is currently instantiated */
+    this._currentOscClass = null;
+  }
+
+  // ── Oscillator class helpers ───────────────────────────────────────────────
+  /** Returns a short string identifying the Tone.js class needed for waveType */
+  static _oscClass(waveType) {
+    if (waveType === "pulse")  return "Pulse";
+    if (waveType === "fmsine") return "FM";
+    if (waveType === "amsine") return "AM";
+    if (waveType === "noise")  return "Noise";
+    return "Oscillator"; // sine | square | triangle | sawtooth
+  }
+
+  /** Instantiate the correct Tone.js oscillator for the current waveType */
+  _createOscillator() {
+    switch (this.waveType) {
+      case "pulse":
+        return new Tone.PulseOscillator({
+          frequency : this.frequency,
+          width     : this.dutyCycle,
+          detune    : this.detune,
+        });
+      case "fmsine":
+        return new Tone.FMOscillator({
+          frequency       : this.frequency,
+          type            : "sine",
+          modulationIndex : this.modulationIndex,
+          harmonicity     : this.harmonicity,
+          detune          : this.detune,
+        });
+      case "amsine":
+        return new Tone.AMOscillator({
+          frequency   : this.frequency,
+          type        : "sine",
+          harmonicity : this.harmonicity,
+          detune      : this.detune,
+        });
+      case "noise":
+        return new Tone.Noise({ type: this.noiseType });
+      default:
+        return new Tone.Oscillator({
+          frequency : this.frequency,
+          type      : this.waveType,
+          detune    : this.detune,
+        });
+    }
   }
 
   // ── Audio signal chain ─────────────────────────────────────────────────────
@@ -62,25 +119,56 @@ class Layer {
       this.reverbNode = new Tone.Reverb({ decay: 2.5, wet: this.reverb }).toDestination();
       this.panner     = new Tone.Panner(this.pan).connect(this.reverbNode);
       this.gain       = new Tone.Gain(this.muted ? 0 : this.amplitude * 0.15).connect(this.panner);
-      this.oscillator = new Tone.Oscillator({
-        frequency : this.frequency,
-        type      : this.waveType,
-        detune    : this.detune,
-      }).connect(this.gain).start();
+      this._currentOscClass = Layer._oscClass(this.waveType);
+      this.oscillator = this._createOscillator();
+      this.oscillator.connect(this.gain).start();
     } catch (err) {
       console.error("[Layer] buildAudio:", err);
     }
   }
 
-  /** Sync all Tone.js nodes to current attribute values (ramped, no clicks) */
+  /** Sync all Tone.js nodes to current attribute values.
+   *  Rebuilds the oscillator if the waveType requires a different Tone.js class. */
   updateAudio() {
     if (!this.oscillator) return;
-    this.oscillator.frequency.rampTo(this.frequency, 0.05);
-    try { this.oscillator.type = this.waveType; } catch (_) { /* type change may glitch on some browsers */ }
-    this.oscillator.detune.rampTo(this.detune, 0.05);
+
+    // Always update shared nodes
     this.gain.gain.rampTo(this.muted ? 0 : this.amplitude * 0.15, 0.05);
     this.panner.pan.rampTo(this.pan, 0.05);
     this.reverbNode.wet.rampTo(this.reverb, 0.1);
+
+    // Rebuild oscillator if the class needs to change (e.g. sine → noise)
+    const neededClass = Layer._oscClass(this.waveType);
+    if (this._currentOscClass !== neededClass) {
+      this.oscillator.stop();
+      this.oscillator.dispose();
+      this._currentOscClass = neededClass;
+      this.oscillator = this._createOscillator();
+      this.oscillator.connect(this.gain).start();
+      return;
+    }
+
+    // Noise: no frequency / detune, only color
+    if (this.waveType === "noise") {
+      this.oscillator.type = this.noiseType;
+      return;
+    }
+
+    // All other oscillators share frequency + detune
+    this.oscillator.frequency.rampTo(this.frequency, 0.05);
+    this.oscillator.detune.rampTo(this.detune, 0.05);
+
+    if (this.waveType === "pulse") {
+      this.oscillator.width.rampTo(this.dutyCycle, 0.05);
+    } else if (this.waveType === "fmsine") {
+      this.oscillator.modulationIndex.rampTo(this.modulationIndex, 0.05);
+      this.oscillator.harmonicity.rampTo(this.harmonicity, 0.05);
+    } else if (this.waveType === "amsine") {
+      this.oscillator.harmonicity.rampTo(this.harmonicity, 0.05);
+    } else {
+      // sine | square | triangle | sawtooth — just swap type in place
+      try { this.oscillator.type = this.waveType; } catch (_) {}
+    }
   }
 
   /** Stop and dispose all Tone.js nodes */
@@ -107,6 +195,28 @@ class Layer {
         // Descending sawtooth matching Web Audio / Tone.js convention
         const norm = ((theta / twoPI) % 1 + 1) % 1;
         return 1 - 2 * norm;
+      }
+      case "pulse": {
+        // Asymmetric square wave controlled by duty cycle
+        const norm = ((theta / twoPI) % 1 + 1) % 1;
+        return norm < this.dutyCycle ? 1 : -1;
+      }
+      case "fmsine": {
+        // FM synthesis: carrier modulated by a sine at harmonicity * carrier freq
+        return Math.sin(theta + this.modulationIndex * Math.sin(this.harmonicity * theta));
+      }
+      case "amsine": {
+        // AM synthesis: carrier amplitude shaped by a slow modulator
+        return Math.sin(theta) * (0.5 + 0.5 * Math.sin(this.harmonicity * theta));
+      }
+      case "noise": {
+        // Hash-based pseudo-noise: deterministic per (x, frame bucket)
+        // updateRate controls how fast the noise pattern shifts over time
+        const updateRate = this.noiseType === "white" ? 2 : this.noiseType === "pink" ? 6 : 15;
+        const frameQ = Math.floor(t * 50 / updateRate);
+        const xq     = Math.floor(x / 3);
+        const n = Math.sin(xq * 127.1 + frameQ * 311.7) * 43758.5453;
+        return (n - Math.floor(n)) * 2 - 1;
       }
       default: return Math.sin(theta);
     }
@@ -318,7 +428,8 @@ function wireControls() {
   });
 
   // ── Editor sliders ───────────────────────────────────────────
-  ["freq", "amp", "speed", "phase", "detune", "pan", "reverb", "opacity", "thickness", "glow"].forEach((id) => {
+  ["freq", "amp", "speed", "phase", "detune", "pan", "reverb", "opacity", "thickness", "glow",
+   "duty", "mod-index", "harmonicity"].forEach((id) => {
     const el = document.getElementById(`e-${id}`);
     if (el) el.addEventListener("input", onEditorChange);
   });
@@ -331,8 +442,21 @@ function wireControls() {
       const layer = layers[selectedLayer];
       if (layer) {
         layer.waveType = btn.dataset.wave;
-        layer.updateAudio();
+        layer.updateAudio();        syncWaveTypeControls(layer);
+        renderLayerList(); // update meta label
       }
+    });
+  });
+
+  // ── Noise type buttons ────────────────────────────────────
+  document.querySelectorAll(".noise-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".noise-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      const layer = layers[selectedLayer];
+      if (layer) {
+        layer.noiseType = btn.dataset.noise;
+        layer.updateAudio();      }
     });
   });
 
@@ -366,16 +490,25 @@ function onEditorChange() {
   const layer = layers[selectedLayer];
   if (!layer) return;
 
-  layer.frequency    = Number(document.getElementById("e-freq").value);
-  layer.amplitude    = Number(document.getElementById("e-amp").value);
-  layer.speed        = Number(document.getElementById("e-speed").value);
-  layer.phase        = Number(document.getElementById("e-phase").value);
-  layer.detune       = Number(document.getElementById("e-detune").value);
-  layer.pan          = Number(document.getElementById("e-pan").value);
-  layer.reverb       = Number(document.getElementById("e-reverb").value);
-  layer.opacity      = Number(document.getElementById("e-opacity").value);
-  layer.thickness    = Number(document.getElementById("e-thickness").value);
-  layer.glowIntensity = Number(document.getElementById("e-glow").value);
+  const num = (id, fallback) => {
+    const el = document.getElementById(id);
+    return el ? Number(el.value) : fallback;
+  };
+
+  layer.frequency       = num("e-freq",        layer.frequency);
+  layer.amplitude       = num("e-amp",         layer.amplitude);
+  layer.speed           = num("e-speed",        layer.speed);
+  layer.phase           = num("e-phase",        layer.phase);
+  layer.detune          = num("e-detune",       layer.detune);
+  layer.pan             = num("e-pan",          layer.pan);
+  layer.reverb          = num("e-reverb",       layer.reverb);
+  layer.opacity         = num("e-opacity",      layer.opacity);
+  layer.thickness       = num("e-thickness",    layer.thickness);
+  layer.glowIntensity   = num("e-glow",         layer.glowIntensity);
+  // wave-type-specific
+  layer.dutyCycle       = num("e-duty",         layer.dutyCycle);
+  layer.modulationIndex = num("e-mod-index",    layer.modulationIndex);
+  layer.harmonicity     = num("e-harmonicity",  layer.harmonicity);
 
   updateValueDisplays(layer);
   layer.updateAudio();
@@ -387,23 +520,46 @@ function updateValueDisplays(layer) {
                : "C";
 
   [
-    ["e-freq",      `${Math.round(layer.frequency)} Hz`],
-    ["e-amp",       layer.amplitude.toFixed(2)],
-    ["e-speed",     `${layer.speed.toFixed(2)}x`],
-    ["e-phase",     `${layer.phase.toFixed(2)} rad`],
-    ["e-detune",    `${layer.detune >= 0 ? "+" : ""}${Math.round(layer.detune)} ¢`],
-    ["e-pan",       panStr],
-    ["e-reverb",    `${Math.round(layer.reverb * 100)}%`],
-    ["e-opacity",   `${Math.round(layer.opacity * 100)}%`],
-    ["e-thickness", `${layer.thickness.toFixed(1)}px`],
-    ["e-glow",      `${Math.round(layer.glowIntensity * 100)}%`],
+    ["e-freq",        `${Math.round(layer.frequency)} Hz`],
+    ["e-amp",         layer.amplitude.toFixed(2)],
+    ["e-speed",       `${layer.speed.toFixed(2)}x`],
+    ["e-phase",       `${layer.phase.toFixed(2)} rad`],
+    ["e-detune",      `${layer.detune >= 0 ? "+" : ""}${Math.round(layer.detune)} ¢`],
+    ["e-pan",         panStr],
+    ["e-reverb",      `${Math.round(layer.reverb * 100)}%`],
+    ["e-opacity",     `${Math.round(layer.opacity * 100)}%`],
+    ["e-thickness",   `${layer.thickness.toFixed(1)}px`],
+    ["e-glow",        `${Math.round(layer.glowIntensity * 100)}%`],
+    ["e-duty",        `${Math.round(layer.dutyCycle * 100)}%`],
+    ["e-mod-index",   layer.modulationIndex.toFixed(1)],
+    ["e-harmonicity", `${layer.harmonicity.toFixed(1)}x`],
   ].forEach(([id, val]) => {
     const el = document.getElementById(`${id}-val`);
     if (el) el.textContent = val;
   });
 }
 
-// ─── Layer List ────────────────────────────────────────────────────────────────
+// ─── Wave-type-specific control visibility ──────────────────────────────────
+
+/**
+ * Show/hide the wave-params block and individual rows based on the
+ * selected layer's waveType. Rows declare which types they belong to
+ * via data-show-for="type1 type2" on the element.
+ */
+function syncWaveTypeControls(layer) {
+  const wavesWithParams = ["pulse", "fmsine", "amsine", "noise"];
+  const block = document.getElementById("wave-params-block");
+  if (!block) return;
+
+  block.style.display = wavesWithParams.includes(layer.waveType) ? "" : "none";
+
+  document.querySelectorAll(".wave-param-row").forEach((row) => {
+    const showFor = (row.dataset.showFor || "").split(" ");
+    row.style.display = showFor.includes(layer.waveType) ? "" : "none";
+  });
+}
+
+
 
 function renderLayerList() {
   const list = document.getElementById("layer-list");
@@ -473,11 +629,19 @@ function syncEditorFromLayer(layer) {
   set("e-opacity",   layer.opacity);
   set("e-thickness", layer.thickness);
   set("e-glow",      layer.glowIntensity);
-  set("e-color",     layer.color);
+  set("e-color",        layer.color);
+  set("e-duty",         layer.dutyCycle);
+  set("e-mod-index",    layer.modulationIndex);
+  set("e-harmonicity",  layer.harmonicity);
 
   document.querySelectorAll(".wave-btn").forEach((b) =>
     b.classList.toggle("active", b.dataset.wave === layer.waveType)
   );
+  document.querySelectorAll(".noise-btn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.noise === layer.noiseType)
+  );
+
+  syncWaveTypeControls(layer);
   updateValueDisplays(layer);
 }
 
