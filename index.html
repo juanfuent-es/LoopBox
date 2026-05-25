@@ -11,14 +11,41 @@
   </head>
   <body>
 
-    <!-- ── Side Panel ─────────────────────────────────────── -->
+    <!-- ── Transport Bar (full-width, fixed height 44px) ────── -->
+    <header class="transport-bar">
+      <div class="t-left">
+        <button id="play-btn" class="t-btn play-btn">&#9654; PLAY</button>
+        <button id="stop-btn" class="t-btn stop-btn">&#9632; STOP</button>
+      </div>
+      <div class="t-center">
+        <span class="t-label">BPM</span>
+        <input type="range" id="t-bpm" min="40" max="240" step="1" value="120" />
+        <span id="t-bpm-val" class="t-val">120</span>
+        <span class="t-sep">&#183;</span>
+        <span class="t-label">BARS</span>
+        <button class="bars-btn" data-bars="1">1</button>
+        <button class="bars-btn active" data-bars="2">2</button>
+        <button class="bars-btn" data-bars="4">4</button>
+        <button class="bars-btn" data-bars="8">8</button>
+        <span class="t-sep">&#183;</span>
+        <span class="t-label">DUR</span>
+        <span id="t-duration" class="t-val t-dur">4.0s</span>
+      </div>
+      <div class="t-right">
+        <button id="audio-btn" class="audio-btn-inline">&#9654; AUDIO</button>
+      </div>
+    </header>
+
+    <!-- ── App body: panel + canvas ───────────────────────── -->
+    <div class="app-body">
+
+    <!-- ── Side Panel ────────────────────────────── -->
     <aside class="panel">
       <header class="panel-header">
         <div class="logo">
           <span class="logo-main">LOOP</span><span class="logo-accent">BOX</span>
           <span class="logo-ver">OSC v2.0</span>
         </div>
-        <button id="audio-btn" class="audio-btn">▶ INICIAR AUDIO</button>
       </header>
 
       <section class="layer-section">
@@ -27,6 +54,22 @@
           <button id="add-layer-btn" class="add-btn">+ ADD</button>
         </div>
         <div id="layer-list" class="layer-list"></div>
+      </section>
+
+      <!-- ── Loop Library ──────────────────────────── -->
+      <section class="loop-section">
+        <div class="section-header">
+          <span class="section-label">// LOOPS</span>
+          <div class="loop-header-actions">
+            <button id="save-loop-btn" class="save-btn">SAVE</button>
+            <button id="new-loop-btn" class="new-btn-sm">NEW</button>
+          </div>
+        </div>
+        <div class="loop-name-row">
+          <input type="text" id="loop-name-input" class="loop-name-input"
+                 placeholder="Loop name..." maxlength="30" />
+        </div>
+        <div id="loop-list" class="loop-list"></div>
       </section>
 
       <footer class="panel-footer">
@@ -38,7 +81,7 @@
 
     <!-- ── Canvas ─────────────────────────────────────────── -->
     <main id="canvas-root"></main>
-
+    </div><!-- /.app-body -->
     <!-- ── Floating Layer Editor ──────────────────────────── -->
     <div id="layer-editor" class="layer-editor" role="dialog" aria-label="Editor de capa">
       <div class="editor-header">
@@ -50,6 +93,30 @@
       </div>
 
       <div class="editor-body">
+
+        <!-- Step Sequencer -->
+        <div class="editor-block" id="step-block">
+          <div class="step-block-header">
+            <span class="block-label">// PATTERN</span>
+            <button id="step-mode-btn" class="step-mode-btn">STEP: OFF</button>
+          </div>
+          <div id="step-grid" class="step-grid" style="display:none"></div>
+        </div>
+
+        <!-- Envelope (visible solo en step mode) -->
+        <div class="editor-block" id="envelope-block" style="display:none">
+          <div class="block-label">// ENVELOPE</div>
+          <div class="slider-row">
+            <span class="s-label">ATTACK</span>
+            <input type="range" id="e-attack" min="0.001" max="0.5" step="0.001" value="0.005" />
+            <span class="s-val" id="e-attack-val">5ms</span>
+          </div>
+          <div class="slider-row">
+            <span class="s-label">RELEASE</span>
+            <input type="range" id="e-release" min="0.01" max="1" step="0.01" value="0.08" />
+            <span class="s-val" id="e-release-val">80ms</span>
+          </div>
+        </div>
 
         <!-- Wave Type -->
         <div class="editor-block">

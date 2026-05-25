@@ -15,6 +15,120 @@
  */
 
 import { state } from './state.js';
+import { listarLoops, guardarLoop, cargarLoop, eliminarLoop } from './Storage.js';
+
+// ══════════════════════════════════════════════════════════════
+// Grilla de pasos del secuenciador
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Renderiza la grilla de 16 pasos para la capa dada en #step-grid.
+ * Solo visible cuando capa.stepMode = true.
+ * Cada celda es un botón que alterna el paso entre activo (1) y silencio (0).
+ * Los pasos en posición 0, 4, 8, 12 son tiempos fuertes (beat) y tienen marca visual.
+ *
+ * @param {import('./Layer.js').default} capa
+ */
+export function renderStepGrid(capa) {
+  const grid    = document.getElementById('step-grid');
+  const modeBtn = document.getElementById('step-mode-btn');
+  const envBlock = document.getElementById('envelope-block');
+  if (!grid) return;
+
+  // Actualizar botón de modo
+  if (modeBtn) {
+    modeBtn.textContent = capa.stepMode ? 'STEP: ON' : 'STEP: OFF';
+    modeBtn.classList.toggle('active', capa.stepMode);
+  }
+
+  // Mostrar/ocultar grilla y envelope según el modo
+  grid.style.display    = capa.stepMode ? '' : 'none';
+  if (envBlock) envBlock.style.display = capa.stepMode ? '' : 'none';
+
+  if (!capa.stepMode) return;
+
+  // Reconstruir las 16 celdas
+  grid.innerHTML = '';
+  capa.steps.forEach((activo, i) => {
+    const cell = document.createElement('button');
+    cell.className = [
+      'step-cell',
+      activo    ? 'active' : '',
+      i % 4 === 0 ? 'beat'   : '',
+    ].filter(Boolean).join(' ');
+    cell.dataset.step = i;
+    cell.title = `Paso ${i + 1}`;
+
+    cell.addEventListener('click', () => {
+      // Alternar el paso
+      capa.steps[i] = capa.steps[i] ? 0 : 1;
+      // Actualizar la Sequence de Tone.js si está corriendo
+      if (capa.sequence) capa.sequence.events = [...capa.steps];
+      // Re-renderizar solo la celda tocada (evitar reconstruir todo el grid)
+      cell.classList.toggle('active', !!capa.steps[i]);
+    });
+
+    grid.appendChild(cell);
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// Lista de loops guardados
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Reconstruye la lista de loops guardados en #loop-list.
+ * Cada item muestra: nombre, BPM, número de bars, duración en segundos.
+ * Clic en el item carga el loop; clic en ✕ lo elimina.
+ *
+ * @param {Function} [onCarga] - Callback invocado después de cargar un loop
+ */
+export function renderLoopList(onCarga) {
+  const lista = document.getElementById('loop-list');
+  if (!lista) return;
+
+  const loops = listarLoops();
+  lista.innerHTML = '';
+
+  if (loops.length === 0) {
+    lista.innerHTML = '<div class="loop-empty">No hay loops guardados</div>';
+    return;
+  }
+
+  loops.slice().reverse().forEach(loop => {
+    const dur = (loop.bars * (60 / loop.bpm) * 4).toFixed(1);
+    const item = document.createElement('div');
+    item.className = [
+      'loop-item',
+      loop.id === state.currentLoopId ? 'selected' : '',
+    ].filter(Boolean).join(' ');
+
+    item.innerHTML = `
+      <div class="loop-item-info">
+        <span class="loop-item-name">${loop.name}</span>
+        <span class="loop-item-meta">${loop.bpm} BPM · ${loop.bars}B · ${dur}s</span>
+      </div>
+      <button class="loop-del-btn" data-id="${loop.id}" title="Eliminar">✕</button>`;
+
+    // Clic en el item (no en el botón de eliminar) → cargar loop
+    item.addEventListener('click', e => {
+      if (e.target.classList.contains('loop-del-btn')) return;
+      cargarLoop(loop.id, () => {
+        if (onCarga) onCarga();
+        renderLoopList(onCarga);
+      });
+    });
+
+    // Clic en ✕ → eliminar loop
+    item.querySelector('.loop-del-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      eliminarLoop(loop.id);
+      renderLoopList(onCarga);
+    });
+
+    lista.appendChild(item);
+  });
+}
 
 // ══════════════════════════════════════════════════════════════
 // Lista de capas en el panel lateral
@@ -144,6 +258,13 @@ export function syncEditorFromLayer(capa) {
   set("e-mod-index",   capa.modulationIndex);
   set("e-harmonicity", capa.harmonicity);
 
+  // Parámetros de envelope (step mode)
+  set("e-attack",      capa.attackTime);
+  set("e-release",     capa.releaseTime);
+
+  // Renderizar grilla de pasos y controlar visibilidad del bloque envelope
+  renderStepGrid(capa);
+
   // Marcar el botón de tipo de onda activo
   document.querySelectorAll(".wave-btn").forEach((btn) =>
     btn.classList.toggle("active", btn.dataset.wave === capa.waveType)
@@ -196,6 +317,10 @@ export function onEditorChange() {
   capa.modulationIndex = num("e-mod-index",    capa.modulationIndex);
   capa.harmonicity     = num("e-harmonicity",  capa.harmonicity);
 
+  // Parámetros de envelope (step mode)
+  capa.attackTime  = num("e-attack",   capa.attackTime);
+  capa.releaseTime = num("e-release",  capa.releaseTime);
+
   updateValueDisplays(capa);
   capa.updateAudio();
 }
@@ -227,6 +352,8 @@ export function updateValueDisplays(capa) {
     ["e-duty",        `${Math.round(capa.dutyCycle * 100)}%`],
     ["e-mod-index",   capa.modulationIndex.toFixed(1)],
     ["e-harmonicity", `${capa.harmonicity.toFixed(1)}x`],
+    ["e-attack",      `${Math.round(capa.attackTime * 1000)}ms`],
+    ["e-release",     `${Math.round(capa.releaseTime * 1000)}ms`],
   ].forEach(([id, val]) => {
     const el = document.getElementById(`${id}-val`);
     if (el) el.textContent = val;

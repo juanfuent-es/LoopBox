@@ -82,15 +82,36 @@ export default class Layer {
     /** [noise] Color espectral del ruido: 'white' | 'pink' | 'brown' */
     this.noiseType       = "white";
 
+    // ── Parámetros de secuencia rítmica ───────────────────────
+    /**
+     * Patrón de 16 pasos binarios (0 = silencio, 1 = disparo).
+     * Cada paso equivale a una corchea (16n) dentro de un compás de 4/4.
+     */
+    this.steps       = Array(16).fill(0);
+    /**
+     * Modo de paso: false = drone continuo (envelope abierto), true = secuenciado.
+     * En modo drone el oscillator suena siempre; en step mode la Sequence
+     * gate-a el AmplitudeEnvelope en los pasos activos.
+     */
+    this.stepMode    = false;
+    /** Tiempo de ataque del AmplitudeEnvelope en modo step (segundos) */
+    this.attackTime  = 0.005;
+    /** Tiempo de release del AmplitudeEnvelope en modo step (segundos) */
+    this.releaseTime = 0.08;
+
     // ── Nodos Tone.js internos ─────────────────────────────────
     /** @type {Tone.Oscillator|Tone.PulseOscillator|Tone.FMOscillator|Tone.AMOscillator|Tone.Noise|null} */
     this.oscillator    = null;
+    /** @type {Tone.AmplitudeEnvelope|null} Envelope que gate-a la señal por paso */
+    this.envelope      = null;
     /** @type {Tone.Gain|null} */
     this.gain          = null;
     /** @type {Tone.Panner|null} */
     this.panner        = null;
     /** @type {Tone.Reverb|null} */
     this.reverbNode    = null;
+    /** @type {Tone.Sequence|null} Sequence rítmica — null en modo drone */
+    this.sequence      = null;
     /** Rastrea qué clase de oscilador Tone.js está instanciada actualmente */
     this._currentOscClass = null;
   }
@@ -167,10 +188,13 @@ export default class Layer {
   /**
    * Construye la cadena de audio de esta capa y la inicia.
    *
-   * Cadena: Oscillator → Gain → Panner → Reverb → Tone.Destination
+   * Cadena: Oscillator → AmplitudeEnvelope → Gain → Panner → Reverb → Tone.Destination
    *
-   * Todas las capas envían su señal al mismo Tone.Destination,
-   * mezclándose automáticamente en la composición final.
+   * El AmplitudeEnvelope actúa como gate:
+   *  - En modo drone (stepMode=false): se abre permanentemente vía triggerAttack().
+   *  - En modo step  (stepMode=true):  una Tone.Sequence lo dispara por paso activo.
+   *
+   * Todas las capas envían su señal al mismo Tone.Destination (mezcla final).
    */
   buildAudio() {
     if (this.oscillator) return; // ya iniciado, no duplicar
@@ -181,13 +205,55 @@ export default class Layer {
       this.panner     = new Tone.Panner(this.pan).connect(this.reverbNode);
       this.gain       = new Tone.Gain(this.muted ? 0 : this.amplitude * 0.15).connect(this.panner);
 
+      // AmplitudeEnvelope: gate de la señal entre oscilador y gain
+      this.envelope = new Tone.AmplitudeEnvelope({
+        attack  : this.attackTime,
+        decay   : 0.01,
+        sustain : 1,
+        release : this.releaseTime,
+      }).connect(this.gain);
+
       // Crear e iniciar el oscilador adecuado para el tipo de onda actual
       this._currentOscClass = Layer._oscClass(this.waveType);
       this.oscillator = this._createOscillator();
-      this.oscillator.connect(this.gain).start();
+      this.oscillator.connect(this.envelope).start();
+
+      // Abrir el envelope según el modo
+      if (!this.stepMode) {
+        // Drone: envelope abierto permanentemente
+        this.envelope.triggerAttack(Tone.now());
+      } else {
+        // Step mode: crear la Sequence que dispara el envelope por paso activo
+        this._buildSequence();
+      }
     } catch (err) {
       console.error("[Layer] buildAudio:", err);
     }
+  }
+
+  /**
+   * Construye y arranca la Tone.Sequence interna para el modo step.
+   * La Sequence itera los 16 pasos en subdivisión de 16ava nota ("16n").
+   * Los pasos con valor 1 disparan el envelope; los 0 se ignoran.
+   * @private
+   */
+  _buildSequence() {
+    if (this.sequence) {
+      this.sequence.stop();
+      this.sequence.dispose();
+    }
+    this.sequence = new Tone.Sequence(
+      (time, value) => {
+        if (value === 1 && !this.muted) {
+          // Duración del trigger: 85% de la subdivisión para dejar pequeño silencio entre pasos
+          const dur = Tone.Time("16n").toSeconds() * 0.85;
+          this.envelope.triggerAttackRelease(dur, time);
+        }
+      },
+      [...this.steps],
+      "16n"
+    );
+    this.sequence.start(0); // sincronizar al inicio del Transport
   }
 
   /**
@@ -205,6 +271,15 @@ export default class Layer {
     this.panner.pan.rampTo(this.pan, 0.05);
     this.reverbNode.wet.rampTo(this.reverb, 0.1);
 
+    // Actualizar parámetros del envelope
+    this.envelope.attack  = this.attackTime;
+    this.envelope.release = this.releaseTime;
+
+    // Actualizar pasos de la Sequence si está en modo step
+    if (this.stepMode && this.sequence) {
+      this.sequence.events = [...this.steps];
+    }
+
     // Reconstruir el oscilador si la clase Tone.js necesaria cambió
     const claseNecesaria = Layer._oscClass(this.waveType);
     if (this._currentOscClass !== claseNecesaria) {
@@ -212,7 +287,7 @@ export default class Layer {
       this.oscillator.dispose();
       this._currentOscClass = claseNecesaria;
       this.oscillator = this._createOscillator();
-      this.oscillator.connect(this.gain).start();
+      this.oscillator.connect(this.envelope).start();
       return; // el oscilador nuevo ya tiene los parámetros correctos
     }
 
@@ -243,17 +318,54 @@ export default class Layer {
   }
 
   /**
+   * Alterna entre modo drone (continuo) y modo step (secuenciado).
+   *
+   * - Drone → Step: cierra el envelope permanente, inicia la Sequence.
+   * - Step → Drone: para la Sequence, abre el envelope permanentemente.
+   *
+   * Si el audio no está iniciado aún, solo actualiza el flag `stepMode`
+   * y `buildAudio()` leerá el valor correcto cuando se llame.
+   *
+   * @param {boolean} on - true = activar modo step, false = modo drone
+   */
+  setStepMode(on) {
+    this.stepMode = on;
+    if (!this.oscillator) return; // audio no iniciado aún
+
+    if (on) {
+      // Drone → Step: cerrar envelope permanente y arrancar Sequence
+      this.envelope.triggerRelease(Tone.now());
+      this._buildSequence();
+    } else {
+      // Step → Drone: parar Sequence y abrir envelope permanentemente
+      if (this.sequence) {
+        this.sequence.stop();
+        this.sequence.dispose();
+        this.sequence = null;
+      }
+      this.envelope.triggerAttack(Tone.now());
+    }
+  }
+
+  /**
    * Detiene y libera todos los nodos Tone.js de esta capa, liberando memoria de audio.
    * Llamar al eliminar la capa.
    */
   destroy() {
     if (!this.oscillator) return;
+    // Parar la Sequence antes de disponer nodos dependientes
+    if (this.sequence) {
+      this.sequence.stop();
+      this.sequence.dispose();
+      this.sequence = null;
+    }
     this.oscillator.stop();
     this.oscillator.dispose();
+    this.envelope.dispose();
     this.gain.dispose();
     this.panner.dispose();
     this.reverbNode.dispose();
-    this.oscillator = this.gain = this.panner = this.reverbNode = null;
+    this.oscillator = this.envelope = this.gain = this.panner = this.reverbNode = null;
   }
 
   // ══════════════════════════════════════════════════════════════

@@ -26,17 +26,32 @@
  *  - Editor.js   → funciones del panel de control por capa
  */
 
-import { state, PANEL_W, EDITOR_W } from './state.js';
+import { state, PANEL_W, EDITOR_W, TRANSPORT_H } from './state.js';
 import Layer from './Layer.js';
 import { drawGrid, drawHUD, drawCompositeWave } from './Renderer.js';
 import {
   renderLayerList,
+  renderStepGrid,
+  renderLoopList,
   openEditor,
   closeEditor,
   syncEditorFromLayer,
   onEditorChange,
   syncWaveTypeControls,
 } from './Editor.js';
+import {
+  initTransport,
+  setBpm,
+  setBars,
+  transportPlay,
+  transportStop,
+  actualizarDuracion,
+} from './Transport.js';
+import {
+  guardarLoop,
+  nuevoLoop,
+  listarLoops,
+} from './Storage.js';
 
 // ══════════════════════════════════════════════════════════════
 // Ciclo de vida p5.js — asignados a window para modo global
@@ -50,21 +65,107 @@ import {
  */
 window.setup = function () {
   // Crear el canvas en el contenedor #canvas-root
-  const canvas = createCanvas(window.innerWidth - PANEL_W, window.innerHeight);
+  // Se descuenta el panel lateral (ancho) y la barra de Transport (alto)
+  const canvas = createCanvas(
+    window.innerWidth  - PANEL_W,
+    window.innerHeight - TRANSPORT_H,
+  );
   canvas.parent("canvas-root");
   pixelDensity(1);       // evitar escalado en pantallas de alta densidad
   textFont("monospace"); // fuente del HUD consistente con el diseño retro
 
-  // Crear 3 capas iniciales con valores escalonados
-  for (let i = 0; i < 3; i++) {
-    state.layers.push(new Layer(i));
+  // Inicializar el Transport con BPM y bars del estado (no requiere audio aún)
+  initTransport();
+  actualizarDuracion();
+
+  // ── Preset: drone armónico en La menor (raíz A2 = 110 Hz) ──────────────
+  // 6 capas afinadas en ratios justos sobre 110 Hz, con paneo complementario
+  // para crear anchura estéreo y reverb creciente hacia las capas superiores.
+
+  /** @param {number} i - índice de paleta de color */
+  function capaPreset(i, nombre, opciones) {
+    const c = new Layer(i);
+    c.name = nombre;
+    Object.assign(c, opciones);
+    return c;
   }
+
+  state.layers.push(capaPreset(0, "Sub", {
+    frequency    : 55,          // A1 — sub-bass, fundamento infrasonoro
+    waveType     : "sine",
+    amplitude    : 0.45,
+    speed        : 0.8,
+    pan          : 0,
+    reverb       : 0.05,
+    glowIntensity: 0.9,
+    thickness    : 2.5,
+  }));
+
+  state.layers.push(capaPreset(1, "Bass", {
+    frequency    : 110,         // A2 — raíz con armónicos de sierra
+    waveType     : "sawtooth",
+    amplitude    : 0.28,
+    speed        : 1.0,
+    pan          : -0.1,
+    reverb       : 0.15,
+    glowIntensity: 0.7,
+    thickness    : 1.8,
+  }));
+
+  state.layers.push(capaPreset(2, "Fifth", {
+    frequency    : 165,         // E3 — quinta perfecta (110 × 3/2)
+    waveType     : "triangle",
+    amplitude    : 0.20,
+    speed        : 1.5,
+    pan          : 0.35,
+    reverb       : 0.25,
+    glowIntensity: 0.6,
+    thickness    : 1.5,
+  }));
+
+  state.layers.push(capaPreset(3, "Octave", {
+    frequency    : 220,         // A3 — octava (110 × 2), modulación AM suave
+    waveType     : "amsine",
+    amplitude    : 0.15,
+    speed        : 1.2,
+    pan          : -0.4,
+    reverb       : 0.35,
+    harmonicity  : 2,
+    glowIntensity: 0.55,
+    thickness    : 1.4,
+  }));
+
+  state.layers.push(capaPreset(4, "Third", {
+    frequency       : 131,      // C3 — tercera menor (110 × 6/5 ≈ 130.8 Hz → acorde Am)
+    waveType        : "fmsine",
+    amplitude       : 0.12,
+    speed           : 1.1,
+    pan             : 0.55,
+    reverb          : 0.45,
+    modulationIndex : 3,
+    harmonicity     : 1.2,
+    glowIntensity   : 0.5,
+    thickness       : 1.3,
+  }));
+
+  state.layers.push(capaPreset(5, "Air", {
+    frequency    : 440,         // A4 — ruido rosa: textura aérea, filtrado naturalmente
+    waveType     : "noise",
+    noiseType    : "pink",
+    amplitude    : 0.07,
+    speed        : 1.0,
+    pan          : 0,
+    reverb       : 0.65,
+    glowIntensity: 0.4,
+    thickness    : 1.0,
+  }));
 
   // Registrar todos los controles del panel y el editor
   _wireControls();
 
-  // Renderizar la lista de capas en el panel lateral
+  // Renderizar la lista de capas y loops guardados en el panel lateral
   renderLayerList();
+  renderLoopList(() => { renderLayerList(); renderLoopList(); });
 };
 
 /**
@@ -101,7 +202,7 @@ window.draw = function () {
  * Redimensiona el canvas manteniendo el panel lateral con su ancho fijo.
  */
 window.windowResized = function () {
-  resizeCanvas(window.innerWidth - PANEL_W, window.innerHeight);
+  resizeCanvas(window.innerWidth - PANEL_W, window.innerHeight - TRANSPORT_H);
 };
 
 /**
@@ -152,9 +253,9 @@ function _wireControls() {
   // Tone.js requiere que el contexto de audio sea iniciado por un gesto del usuario
   document.getElementById("audio-btn").addEventListener("click", async () => {
     if (state.audioStarted) return;
-
     await Tone.start(); // solicitar permiso de audio al navegador
     state.audioStarted = true;
+    initTransport();  // configurar Transport tras obtener el contexto
 
     // Iniciar todos los osciladores simultáneamente → mezcla final en Tone.Destination
     state.layers.forEach((capa) => capa.buildAudio());
@@ -163,6 +264,71 @@ function _wireControls() {
     const btn = document.getElementById("audio-btn");
     btn.textContent = "◉ AUDIO ON";
     btn.classList.add("active");
+  });
+
+  // ── Transport: PLAY ──────────────────────────────────────────
+  document.getElementById("play-btn").addEventListener("click", async () => {
+    // Inicializar audio si aún no se hizo (compatible con PLAY como primer gesto)
+    if (!state.audioStarted) {
+      await Tone.start();
+      state.audioStarted = true;
+      initTransport();
+      state.layers.forEach(c => c.buildAudio());
+      const audioBtn = document.getElementById("audio-btn");
+      if (audioBtn) { audioBtn.textContent = "◉ AUDIO ON"; audioBtn.classList.add("active"); }
+    }
+    transportPlay();
+  });
+
+  // ── Transport: STOP ──────────────────────────────────────────
+  document.getElementById("stop-btn").addEventListener("click", () => {
+    transportStop();
+  });
+
+  // ── Transport: BPM slider ──────────────────────────────────
+  document.getElementById("t-bpm").addEventListener("input", (e) => {
+    setBpm(Number(e.target.value));
+    const valEl = document.getElementById("t-bpm-val");
+    if (valEl) valEl.textContent = state.bpm;
+  });
+
+  // ── Transport: botones BARS ────────────────────────────────
+  document.querySelectorAll(".bars-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".bars-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      setBars(Number(btn.dataset.bars));
+    });
+  });
+
+  // ── Guardar loop ──────────────────────────────────────────
+  document.getElementById("save-loop-btn").addEventListener("click", () => {
+    const nombreInput = document.getElementById("loop-name-input");
+    guardarLoop(nombreInput ? nombreInput.value.trim() || undefined : undefined);
+    renderLoopList(() => { renderLayerList(); renderLoopList(); });
+    // Feedback visual breve en el botón
+    const btn = document.getElementById("save-loop-btn");
+    btn.textContent = "SAVED!";
+    setTimeout(() => { btn.textContent = "SAVE"; }, 1200);
+  });
+
+  // ── Nuevo loop ────────────────────────────────────────────
+  document.getElementById("new-loop-btn").addEventListener("click", () => {
+    if (!confirm("Crear un loop nuevo perderá los cambios sin guardar. ¿Continuar?")) return;
+    nuevoLoop(() => {
+      closeEditor();
+      renderLayerList();
+      renderLoopList(() => { renderLayerList(); renderLoopList(); });
+      // Actualizar sliders de Transport con los valores reseteados
+      const bpmEl = document.getElementById("t-bpm");
+      const bpmVal = document.getElementById("t-bpm-val");
+      if (bpmEl) bpmEl.value = state.bpm;
+      if (bpmVal) bpmVal.textContent = state.bpm;
+      document.querySelectorAll(".bars-btn").forEach(b =>
+        b.classList.toggle("active", Number(b.dataset.bars) === state.bars)
+      );
+      actualizarDuracion();
+    });
   });
 
   // ── Botón de agregar capa ───────────────────────────────────
@@ -179,17 +345,24 @@ function _wireControls() {
   });
 
   // ── Sliders del editor ──────────────────────────────────────
-  // Parámetros generales + parámetros específicos por tipo de onda
+  // Parámetros generales + parámetros específicos por tipo de onda + envelope
   [
     "freq", "amp", "speed", "phase",   // onda
     "detune", "pan", "reverb",         // audio
     "opacity", "thickness", "glow",    // visual
     "duty", "mod-index", "harmonicity", // tipo-específicos
+    "attack", "release",               // envelope
   ].forEach((id) => {
     const el = document.getElementById(`e-${id}`);
     if (el) el.addEventListener("input", onEditorChange);
   });
-
+  // ── Botón de modo step (toggle drone/secuenciado) ──────────────────
+  document.getElementById("step-mode-btn").addEventListener("click", () => {
+    const capa = state.layers[state.selectedLayer];
+    if (!capa) return;
+    capa.setStepMode(!capa.stepMode);
+    renderStepGrid(capa);
+  });
   // ── Botones de tipo de onda ─────────────────────────────────
   document.querySelectorAll(".wave-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
