@@ -1,0 +1,386 @@
+/**
+ * @file Layer.js
+ * Clase Layer — representa una capa de oscilador visual y de audio en LoopBox.
+ *
+ * Cada capa encapsula:
+ *  - Parámetros de onda (frecuencia, amplitud, velocidad, fase, tipo de forma)
+ *  - Parámetros de estilo visual (color, opacidad, grosor, intensidad de brillo)
+ *  - Parámetros de audio adicionales (detune, paneo, reverb)
+ *  - Parámetros específicos por tipo de onda (dutyCycle, modulationIndex, harmonicity, noiseType)
+ *  - Nodos internos de Tone.js (oscilador, gain, panner, reverb)
+ *
+ * Cadena de señal de audio por capa:
+ *   Oscillator → Gain → Panner → Reverb → Tone.Destination
+ *
+ * Todas las capas convergen en el mismo Tone.Destination,
+ * formando la mezcla y composición final de audio.
+ *
+ * Dependencias externas (globals vía CDN, cargadas antes del módulo):
+ *  - Tone.js  → Tone.Oscillator, Tone.Reverb, Tone.Gain, Tone.Panner, etc.
+ *  - p5.js    → width, height, stroke(), strokeWeight(), noFill(),
+ *               beginShape(), vertex(), endShape(), drawingContext
+ */
+export default class Layer {
+  /** Paleta de colores retro/técnica — asignada automáticamente por índice */
+  static palette = ["#00ff41", "#ffb700", "#00e5ff", "#ff2d78", "#b800ff", "#ff6b00"];
+
+  /** Contador estático para generar IDs únicos incrementales */
+  static _counter = 0;
+
+  /**
+   * Crea una nueva capa con valores predeterminados basados en el índice.
+   * @param {number} index - Posición en el arreglo de capas (determina color y valores iniciales)
+   */
+  constructor(index = 0) {
+    /** Identificador único auto-incremental */
+    this.id   = ++Layer._counter;
+    /** Nombre visible en la interfaz de usuario */
+    this.name = `Layer ${this.id}`;
+
+    // ── Parámetros de onda y oscilación ───────────────────────
+    /** Frecuencia en Hz — controla la densidad visual de ciclos Y el tono de audio (20–1200) */
+    this.frequency   = 110 + (index % 6) * 55;
+    /** Amplitud 0–1 — altura de la onda Y volumen relativo de audio */
+    this.amplitude   = 0.28 - (index % 5) * 0.02;
+    /** Multiplicador de velocidad de animación horizontal (0.1–6) */
+    this.speed       = 1 + (index % 5) * 0.28;
+    /** Desplazamiento de fase en radianes (0–2π) — corre la onda horizontalmente */
+    this.phase       = 0;
+    /**
+     * Forma de la onda:
+     *  'sine' | 'square' | 'triangle' | 'sawtooth' | 'pulse' | 'fmsine' | 'amsine' | 'noise'
+     */
+    this.waveType    = "sine";
+
+    // ── Estilo visual ──────────────────────────────────────────
+    /** Color de la línea en formato hex — asignado desde la paleta */
+    this.color        = Layer.palette[index % Layer.palette.length];
+    /** Transparencia de la capa 0–1 */
+    this.opacity      = 0.85;
+    /** Grosor del trazo en píxeles (0.5–4) */
+    this.thickness    = 1.8;
+    /** Intensidad del halo de brillo fosforescente 0–1 */
+    this.glowIntensity = 0.6;
+    /** Silenciado — oculta el visual Y silencia el audio sin destruir los nodos */
+    this.muted        = false;
+
+    // ── Parámetros de audio adicionales ───────────────────────
+    /** Ajuste fino de tono en centésimas de semitono (–100 a +100) */
+    this.detune  = 0;
+    /** Posición estéreo: –1 izquierda · 0 centro · +1 derecha */
+    this.pan     = 0;
+    /** Nivel de mezcla húmeda de reverberación 0–1 */
+    this.reverb  = 0;
+
+    // ── Parámetros específicos por tipo de onda ────────────────
+    /** [pulse] Ciclo de trabajo 0.01–0.99 (fracción del período mantenida en alto) */
+    this.dutyCycle       = 0.5;
+    /** [fmsine] Índice de modulación de frecuencia 0.1–20 (profundidad del efecto FM) */
+    this.modulationIndex = 5;
+    /** [fmsine / amsine] Ratio de armonicidad entre portadora y moduladora 0.1–10 */
+    this.harmonicity     = 1;
+    /** [noise] Color espectral del ruido: 'white' | 'pink' | 'brown' */
+    this.noiseType       = "white";
+
+    // ── Nodos Tone.js internos ─────────────────────────────────
+    /** @type {Tone.Oscillator|Tone.PulseOscillator|Tone.FMOscillator|Tone.AMOscillator|Tone.Noise|null} */
+    this.oscillator    = null;
+    /** @type {Tone.Gain|null} */
+    this.gain          = null;
+    /** @type {Tone.Panner|null} */
+    this.panner        = null;
+    /** @type {Tone.Reverb|null} */
+    this.reverbNode    = null;
+    /** Rastrea qué clase de oscilador Tone.js está instanciada actualmente */
+    this._currentOscClass = null;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Helpers de clase de oscilador
+  // ══════════════════════════════════════════════════════════════
+
+  /**
+   * Retorna un identificador corto de la clase Tone.js requerida para el tipo de onda dado.
+   * Se usa para detectar cuándo hay que reconstruir el oscilador al cambiar de tipo.
+   * @param {string} waveType
+   * @returns {string} 'Pulse' | 'FM' | 'AM' | 'Noise' | 'Oscillator'
+   */
+  static _oscClass(waveType) {
+    if (waveType === "pulse")  return "Pulse";
+    if (waveType === "fmsine") return "FM";
+    if (waveType === "amsine") return "AM";
+    if (waveType === "noise")  return "Noise";
+    return "Oscillator"; // sine | square | triangle | sawtooth
+  }
+
+  /**
+   * Instancia el oscilador Tone.js correcto según el tipo de onda actual.
+   * @returns {Tone.Oscillator|Tone.PulseOscillator|Tone.FMOscillator|Tone.AMOscillator|Tone.Noise}
+   */
+  _createOscillator() {
+    switch (this.waveType) {
+      case "pulse":
+        // Onda cuadrada asimétrica con ciclo de trabajo configurable
+        return new Tone.PulseOscillator({
+          frequency : this.frequency,
+          width     : this.dutyCycle,
+          detune    : this.detune,
+        });
+
+      case "fmsine":
+        // Modulación de frecuencia: portadora senoidal modulada por otra senoidal
+        return new Tone.FMOscillator({
+          frequency       : this.frequency,
+          type            : "sine",
+          modulationIndex : this.modulationIndex,
+          harmonicity     : this.harmonicity,
+          detune          : this.detune,
+        });
+
+      case "amsine":
+        // Modulación de amplitud: envolvente senoidal sobre portadora senoidal
+        return new Tone.AMOscillator({
+          frequency   : this.frequency,
+          type        : "sine",
+          harmonicity : this.harmonicity,
+          detune      : this.detune,
+        });
+
+      case "noise":
+        // Generador de ruido estocástico — sin frecuencia definida
+        return new Tone.Noise({ type: this.noiseType });
+
+      default:
+        // Oscilador estándar: sine | square | triangle | sawtooth
+        return new Tone.Oscillator({
+          frequency : this.frequency,
+          type      : this.waveType,
+          detune    : this.detune,
+        });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Cadena de señal de audio
+  // ══════════════════════════════════════════════════════════════
+
+  /**
+   * Construye la cadena de audio de esta capa y la inicia.
+   *
+   * Cadena: Oscillator → Gain → Panner → Reverb → Tone.Destination
+   *
+   * Todas las capas envían su señal al mismo Tone.Destination,
+   * mezclándose automáticamente en la composición final.
+   */
+  buildAudio() {
+    if (this.oscillator) return; // ya iniciado, no duplicar
+
+    try {
+      // Construir cadena de atrás hacia adelante (Destination → fuente)
+      this.reverbNode = new Tone.Reverb({ decay: 2.5, wet: this.reverb }).toDestination();
+      this.panner     = new Tone.Panner(this.pan).connect(this.reverbNode);
+      this.gain       = new Tone.Gain(this.muted ? 0 : this.amplitude * 0.15).connect(this.panner);
+
+      // Crear e iniciar el oscilador adecuado para el tipo de onda actual
+      this._currentOscClass = Layer._oscClass(this.waveType);
+      this.oscillator = this._createOscillator();
+      this.oscillator.connect(this.gain).start();
+    } catch (err) {
+      console.error("[Layer] buildAudio:", err);
+    }
+  }
+
+  /**
+   * Sincroniza todos los nodos Tone.js con los valores actuales de los atributos.
+   *
+   * Si el tipo de onda requiere una clase Tone.js diferente a la instanciada
+   * (p. ej. cambiar de 'sine' a 'noise'), reconstruye el oscilador en caliente
+   * sin interrumpir los demás nodos de la cadena.
+   */
+  updateAudio() {
+    if (!this.oscillator) return;
+
+    // Actualizar siempre: gain (volumen), panner y reverb
+    this.gain.gain.rampTo(this.muted ? 0 : this.amplitude * 0.15, 0.05);
+    this.panner.pan.rampTo(this.pan, 0.05);
+    this.reverbNode.wet.rampTo(this.reverb, 0.1);
+
+    // Reconstruir el oscilador si la clase Tone.js necesaria cambió
+    const claseNecesaria = Layer._oscClass(this.waveType);
+    if (this._currentOscClass !== claseNecesaria) {
+      this.oscillator.stop();
+      this.oscillator.dispose();
+      this._currentOscClass = claseNecesaria;
+      this.oscillator = this._createOscillator();
+      this.oscillator.connect(this.gain).start();
+      return; // el oscilador nuevo ya tiene los parámetros correctos
+    }
+
+    // Ruido: sin frecuencia ni detune, solo cambiar color espectral
+    if (this.waveType === "noise") {
+      this.oscillator.type = this.noiseType;
+      return;
+    }
+
+    // Osciladores con frecuencia: actualizar pitch y detune suavemente
+    this.oscillator.frequency.rampTo(this.frequency, 0.05);
+    this.oscillator.detune.rampTo(this.detune, 0.05);
+
+    if (this.waveType === "pulse") {
+      // Actualizar ciclo de trabajo
+      this.oscillator.width.rampTo(this.dutyCycle, 0.05);
+    } else if (this.waveType === "fmsine") {
+      // Actualizar índice de modulación y armonicidad
+      this.oscillator.modulationIndex.rampTo(this.modulationIndex, 0.05);
+      this.oscillator.harmonicity.rampTo(this.harmonicity, 0.05);
+    } else if (this.waveType === "amsine") {
+      // Actualizar armonicidad de la portadora AM
+      this.oscillator.harmonicity.rampTo(this.harmonicity, 0.05);
+    } else {
+      // sine | square | triangle | sawtooth — cambiar tipo en el oscilador existente
+      try { this.oscillator.type = this.waveType; } catch (_) {}
+    }
+  }
+
+  /**
+   * Detiene y libera todos los nodos Tone.js de esta capa, liberando memoria de audio.
+   * Llamar al eliminar la capa.
+   */
+  destroy() {
+    if (!this.oscillator) return;
+    this.oscillator.stop();
+    this.oscillator.dispose();
+    this.gain.dispose();
+    this.panner.dispose();
+    this.reverbNode.dispose();
+    this.oscillator = this.gain = this.panner = this.reverbNode = null;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Matemáticas de onda
+  // ══════════════════════════════════════════════════════════════
+
+  /**
+   * Calcula la muestra de la onda en el rango –1 … +1 para la posición x del canvas.
+   * Implementa matemáticamente cada tipo de onda para el renderizado visual.
+   *
+   * @param {number} x - Posición horizontal en píxeles (0 … ancho del canvas)
+   * @param {number} w - Ancho total del canvas en píxeles
+   * @param {number} t - Tiempo animado (frameCount * 0.02)
+   * @returns {number} Valor de la muestra entre –1 y +1
+   */
+  sampleWave(x, w, t) {
+    const twoPI = Math.PI * 2;
+    // Ángulo de fase: combina posición X, frecuencia, tiempo y desplazamiento de fase
+    const theta = (x / w) * twoPI * this.frequency * 0.02 + t * this.speed + this.phase;
+
+    switch (this.waveType) {
+
+      case "sine":
+        // Senoidal pura — base de toda síntesis aditiva
+        return Math.sin(theta);
+
+      case "square":
+        // Onda cuadrada perfecta vía signo de la senoidal
+        return Math.sign(Math.sin(theta));
+
+      case "triangle":
+        // Onda triangular vía arcoseno de la senoidal (serie de Fourier impar)
+        return (2 / Math.PI) * Math.asin(Math.sin(theta));
+
+      case "sawtooth": {
+        // Diente de sierra descendente — convención de Web Audio API / Tone.js
+        const norm = ((theta / twoPI) % 1 + 1) % 1;
+        return 1 - 2 * norm;
+      }
+
+      case "pulse": {
+        // Onda cuadrada asimétrica: alta durante dutyCycle, baja el resto
+        const norm = ((theta / twoPI) % 1 + 1) % 1;
+        return norm < this.dutyCycle ? 1 : -1;
+      }
+
+      case "fmsine":
+        // Síntesis FM: portadora senoidal modulada en frecuencia por otra senoidal
+        // Formula: sin(θ + modulationIndex * sin(harmonicity * θ))
+        return Math.sin(theta + this.modulationIndex * Math.sin(this.harmonicity * theta));
+
+      case "amsine":
+        // Síntesis AM: amplitud de la portadora senoidal moldeada por una moduladora lenta
+        // El factor 0.5 + 0.5 * sin(...) mantiene la amplitud en rango 0–1 antes de multiplicar
+        return Math.sin(theta) * (0.5 + 0.5 * Math.sin(this.harmonicity * theta));
+
+      case "noise": {
+        // Pseudo-ruido basado en función hash — determinístico por (x, bucket de frame)
+        // Esto garantiza que el patrón sea consistente en cada frame (sin parpadeo pixel-a-pixel)
+        // updateRate controla la velocidad de cambio: white (rápido) → pink → brown (lento)
+        const updateRate = this.noiseType === "white" ? 2 : this.noiseType === "pink" ? 6 : 15;
+        const frameQ = Math.floor(t * 50 / updateRate);
+        const xq     = Math.floor(x / 3);
+        const n = Math.sin(xq * 127.1 + frameQ * 311.7) * 43758.5453;
+        return (n - Math.floor(n)) * 2 - 1;
+      }
+
+      default:
+        return Math.sin(theta);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Renderizado (usa funciones globales de p5.js)
+  // ══════════════════════════════════════════════════════════════
+
+  /**
+   * Dibuja la forma de onda de esta capa sobre el canvas con efecto de brillo fosforescente.
+   *
+   * Se realizan dos pasadas de dibujo:
+   *  1. Halo difuso: trazo grueso y semitransparente con sombra (efecto glow)
+   *  2. Línea principal: trazo nítido a resolución completa
+   *
+   * Usa las funciones globales de p5.js (stroke, beginShape, vertex, etc.)
+   * que están disponibles porque p5.js se carga como script global antes de los módulos.
+   *
+   * @param {number}  centerY    - Centro vertical del canvas en píxeles
+   * @param {number}  t          - Tiempo animado (frameCount * 0.02)
+   * @param {boolean} isSelected - Si esta capa está seleccionada (trazo ligeramente más grueso)
+   */
+  drawWave(centerY, t, isSelected) {
+    if (this.muted) return; // capa silenciada → no dibujar
+
+    const w      = width;  // variable global de p5.js
+    const scaleY = this.amplitude * height * 0.35; // escala vertical de la onda
+
+    // ── Primera pasada: halo de brillo fosforescente ─────────
+    if (this.glowIntensity > 0.05) {
+      drawingContext.save();
+      drawingContext.globalAlpha = this.opacity * 0.45 * this.glowIntensity;
+      drawingContext.shadowBlur  = 18 * this.glowIntensity;
+      drawingContext.shadowColor = this.color;
+      stroke(this.color);
+      strokeWeight((this.thickness + 4) * this.glowIntensity * 0.7);
+      noFill();
+      beginShape();
+      // Resolución reducida (cada 3px) para eficiencia en el halo
+      for (let x = 0; x < w; x += 3) {
+        vertex(x, centerY + this.sampleWave(x, w, t) * scaleY);
+      }
+      endShape();
+      drawingContext.restore();
+    }
+
+    // ── Segunda pasada: línea principal a resolución completa ─
+    drawingContext.save();
+    drawingContext.globalAlpha  = this.opacity;
+    drawingContext.shadowBlur   = 7 * this.glowIntensity;
+    drawingContext.shadowColor  = this.color;
+    stroke(this.color);
+    strokeWeight(isSelected ? this.thickness + 0.9 : this.thickness);
+    noFill();
+    beginShape();
+    for (let x = 0; x < w; x++) {
+      vertex(x, centerY + this.sampleWave(x, w, t) * scaleY);
+    }
+    endShape();
+    drawingContext.restore();
+  }
+}

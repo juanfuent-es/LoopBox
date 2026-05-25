@@ -227,8 +227,19 @@
       </div><!-- /.editor-body -->
     </div><!-- /#layer-editor -->
 
+    <!--
+      Dependencias externas cargadas como scripts globales (no módulos).
+      Deben cargarse ANTES de main.js para que sus globals (Tone, p5 functions)
+      estén disponibles cuando el módulo ES6 los use.
+    -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/2.0.5/p5.min.js" integrity="sha512-jOTg6ikYiHx1LvbSOucnvZi4shXbaovZ91+rfViIiUFLgAJK+k1oQtGEaLvDB8rsZwEfUksTgmhrxdvEDykuzQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/15.3.5/Tone.js" integrity="sha512-F1myjNkIKU5XJtOs1HXRo/zOjiUsABgFEEGKLx/riwK82jRThZFebEnfF2HWo9eeC+iC1Nwwnn9Vj6OGq+r7rQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="./js/sketch.js"></script>
+
+    <!--
+      Punto de entrada ES6 — carga main.js como módulo.
+      Los imports internos (Layer, Renderer, Editor, state) se resuelven automáticamente.
+      type="module" implica: defer por defecto + scope privado + strict mode.
+    -->
+    <script type="module" src="./js/main.js"></script>
   </body>
 </html>
