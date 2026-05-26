@@ -74,13 +74,19 @@ window.setup = function () {
   pixelDensity(1);       // evitar escalado en pantallas de alta densidad
   textFont("monospace"); // fuente del HUD consistente con el diseño retro
 
-  // Inicializar el Transport con BPM y bars del estado (no requiere audio aún)
+  // ── Preset: Trickfinger — Acid Techno 133 BPM ──────────────────────────
+  // Homenaje a John Frusciante (Trickfinger) — Día del Sintetizador, mayo 2026.
+  // 6 capas: kick sub, línea ácida 303, clap, hi-hat, lead FM, pad AM continuo.
+  // "Como un director de orquesta tocando varios instrumentos al mismo tiempo."
+
+  // Configurar BPM y compases antes de inicializar el Transport
+  state.bpm  = 133;
+  state.bars = 2;
+  state.currentLoopName = "Trickfinger";
+
+  // Inicializar el Transport con los valores del preset (no requiere audio aún)
   initTransport();
   actualizarDuracion();
-
-  // ── Preset: drone armónico en La menor (raíz A2 = 110 Hz) ──────────────
-  // 6 capas afinadas en ratios justos sobre 110 Hz, con paneo complementario
-  // para crear anchura estéreo y reverb creciente hacia las capas superiores.
 
   /** @param {number} i - índice de paleta de color */
   function capaPreset(i, nombre, opciones) {
@@ -90,75 +96,120 @@ window.setup = function () {
     return c;
   }
 
-  state.layers.push(capaPreset(0, "Sub", {
-    frequency    : 55,          // A1 — sub-bass, fundamento infrasonoro
+  // ── Capa 0: KICK — golpe sub en 4/4 con anticipación ─────────────────
+  state.layers.push(capaPreset(0, "Kick", {
+    frequency    : 55,          // A1 — golpe sub grave
     waveType     : "sine",
-    amplitude    : 0.45,
-    speed        : 0.8,
+    amplitude    : 0.55,
+    speed        : 0.6,
     pan          : 0,
-    reverb       : 0.05,
-    glowIntensity: 0.9,
-    thickness    : 2.5,
+    reverb       : 0.04,
+    glowIntensity: 1.0,
+    thickness    : 3.0,
+    stepMode     : true,
+    // 4/4 con golpe de anticipación en paso 15 (upbeat antes del "1")
+    steps        : [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,1],
+    attackTime   : 0.002,
+    releaseTime  : 0.18,
   }));
 
-  state.layers.push(capaPreset(1, "Bass", {
-    frequency    : 110,         // A2 — raíz con armónicos de sierra
+  // ── Capa 1: ACID — línea ácida estilo TB-303 ─────────────────────────
+  state.layers.push(capaPreset(1, "Acid", {
+    frequency    : 110,         // A2 — fundamental de la línea ácida
     waveType     : "sawtooth",
-    amplitude    : 0.28,
-    speed        : 1.0,
-    pan          : -0.1,
-    reverb       : 0.15,
-    glowIntensity: 0.7,
-    thickness    : 1.8,
-  }));
-
-  state.layers.push(capaPreset(2, "Fifth", {
-    frequency    : 165,         // E3 — quinta perfecta (110 × 3/2)
-    waveType     : "triangle",
-    amplitude    : 0.20,
-    speed        : 1.5,
-    pan          : 0.35,
-    reverb       : 0.25,
-    glowIntensity: 0.6,
-    thickness    : 1.5,
-  }));
-
-  state.layers.push(capaPreset(3, "Octave", {
-    frequency    : 220,         // A3 — octava (110 × 2), modulación AM suave
-    waveType     : "amsine",
-    amplitude    : 0.15,
+    amplitude    : 0.38,
     speed        : 1.2,
-    pan          : -0.4,
-    reverb       : 0.35,
-    harmonicity  : 2,
-    glowIntensity: 0.55,
-    thickness    : 1.4,
+    pan          : -0.15,
+    reverb       : 0.22,
+    detune       : -10,         // leve detuning — calidez analógica
+    glowIntensity: 0.85,
+    thickness    : 2.0,
+    stepMode     : true,
+    // Patrón ácido sincopado clásico: off-beats y acentos de contrapulso
+    steps        : [1,0,0,1, 0,1,0,0, 1,0,0,1, 0,0,1,0],
+    attackTime   : 0.004,
+    releaseTime  : 0.14,
   }));
 
-  state.layers.push(capaPreset(4, "Third", {
-    frequency       : 131,      // C3 — tercera menor (110 × 6/5 ≈ 130.8 Hz → acorde Am)
-    waveType        : "fmsine",
-    amplitude       : 0.12,
-    speed           : 1.1,
-    pan             : 0.55,
-    reverb          : 0.45,
-    modulationIndex : 3,
-    harmonicity     : 1.2,
-    glowIntensity   : 0.5,
-    thickness       : 1.3,
+  // ── Capa 2: CLAP — golpe en tiempos 2 y 4 ────────────────────────────
+  state.layers.push(capaPreset(2, "Clap", {
+    frequency    : 880,
+    waveType     : "noise",
+    noiseType    : "white",
+    amplitude    : 0.30,
+    speed        : 1.0,
+    pan          : 0.10,
+    reverb       : 0.18,
+    glowIntensity: 0.65,
+    thickness    : 1.6,
+    stepMode     : true,
+    // Clap en tiempos 2 y 4 (pasos 4 y 12 en 4/4 a 16 pasos)
+    steps        : [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+    attackTime   : 0.001,
+    releaseTime  : 0.07,
   }));
 
-  state.layers.push(capaPreset(5, "Air", {
-    frequency    : 440,         // A4 — ruido rosa: textura aérea, filtrado naturalmente
+  // ── Capa 3: HAT — hi-hat cerrado en 8vas + flam doble al final ───────
+  state.layers.push(capaPreset(3, "Hat", {
+    frequency    : 4000,
     waveType     : "noise",
     noiseType    : "pink",
-    amplitude    : 0.07,
+    amplitude    : 0.13,
     speed        : 1.0,
-    pan          : 0,
-    reverb       : 0.65,
-    glowIntensity: 0.4,
-    thickness    : 1.0,
+    pan          : 0.35,
+    reverb       : 0.08,
+    glowIntensity: 0.50,
+    thickness    : 1.2,
+    stepMode     : true,
+    // 8vas notas + flam doble al final del compás (pasos 14 y 15)
+    steps        : [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,1],
+    attackTime   : 0.001,
+    releaseTime  : 0.028,
   }));
+
+  // ── Capa 4: LEAD — melodía esporádica FM (timbre metálico ácido) ──────
+  state.layers.push(capaPreset(4, "Lead", {
+    frequency       : 220,     // A3 — voz melódica principal
+    waveType        : "fmsine",
+    amplitude       : 0.20,
+    speed           : 1.4,
+    pan             : 0.45,
+    reverb          : 0.38,
+    modulationIndex : 6,        // índice FM alto — timbre metálico ácido
+    harmonicity     : 2,
+    glowIntensity   : 0.70,
+    thickness       : 1.5,
+    stepMode        : true,
+    // Notas dispersas con espacio — "director de orquesta tocando varios instrumentos"
+    steps           : [1,0,0,0, 0,0,1,0, 0,1,0,0, 0,0,0,1],
+    attackTime      : 0.007,
+    releaseTime     : 0.12,
+  }));
+
+  // ── Capa 5: PAD — fondo atmosférico AM, drone continuo ───────────────
+  state.layers.push(capaPreset(5, "Pad", {
+    frequency    : 55,          // A1 — colchón hipnótico de baja frecuencia
+    waveType     : "amsine",
+    harmonicity  : 3,
+    amplitude    : 0.10,
+    speed        : 0.9,
+    pan          : -0.5,
+    reverb       : 0.68,
+    glowIntensity: 0.40,
+    thickness    : 1.0,
+    stepMode     : false,       // drone continuo — no secuenciado
+  }));
+
+  // Sincronizar DOM: BPM slider, nombre del loop y botones BARS con el preset
+  const _bpmEl  = document.getElementById("t-bpm");
+  const _bpmVal = document.getElementById("t-bpm-val");
+  if (_bpmEl)  _bpmEl.value = state.bpm;
+  if (_bpmVal) _bpmVal.textContent = state.bpm;
+  document.querySelectorAll(".bars-btn").forEach(b =>
+    b.classList.toggle("active", Number(b.dataset.bars) === state.bars)
+  );
+  const _nameInput = document.getElementById("loop-name-input");
+  if (_nameInput) _nameInput.value = state.currentLoopName;
 
   // Registrar todos los controles del panel y el editor
   _wireControls();
@@ -186,7 +237,7 @@ window.draw = function () {
   const centerY = height / 2;
   const t       = frameCount * 0.02; // tiempo animado incremental
 
-  // Dibujar cada capa con su onda individual
+  // Dibujar cada capa — blend mode individual, todas en el mismo eje central
   state.layers.forEach((capa, i) => {
     capa.drawWave(centerY, t, i === state.selectedLayer);
   });

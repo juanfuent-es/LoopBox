@@ -24,6 +24,15 @@ export default class Layer {
   /** Paleta de colores retro/técnica — asignada automáticamente por índice */
   static palette = ["#00ff41", "#ffb700", "#00e5ff", "#ff2d78", "#b800ff", "#ff6b00"];
 
+  /**
+   * Blend mode por canal — define cómo cada onda se mezcla sobre las anteriores.
+   * 'lighter'    : suma aditiva de luz (efecto fósforo analógico)
+   * 'screen'     : versión suavizada de lighter
+   * 'overlay'    : contraste relativo al fondo
+   * 'difference' : inversión cromática en intersecciones (interferencia)
+   */
+  static blendModes = ["lighter", "screen", "lighter", "overlay", "difference", "screen"];
+
   /** Contador estático para generar IDs únicos incrementales */
   static _counter = 0;
 
@@ -81,6 +90,8 @@ export default class Layer {
     this.harmonicity     = 1;
     /** [noise] Color espectral del ruido: 'white' | 'pink' | 'brown' */
     this.noiseType       = "white";
+    /** Modo de mezcla Canvas 2D para esta capa (ver Layer.blendModes) */
+    this.blendMode       = Layer.blendModes[index % Layer.blendModes.length];
 
     // ── Parámetros de secuencia rítmica ───────────────────────
     /**
@@ -383,8 +394,11 @@ export default class Layer {
    */
   sampleWave(x, w, t) {
     const twoPI = Math.PI * 2;
-    // Ángulo de fase: combina posición X, frecuencia, tiempo y desplazamiento de fase
-    const theta = (x / w) * twoPI * this.frequency * 0.02 + t * this.speed + this.phase;
+    // Ciclos visibles: la frecuencia real (audio) se mapea a un rango visual acotado.
+    // Mínimo 1 ciclo (ondas graves), máximo 3 ciclos (frecuencias altas).
+    // Esto evita que capas de alta frecuencia (hi-hats, claps) saturen la pantalla de picos.
+    const visualCycles = Math.max(1, Math.min(this.frequency * 0.02, 3));
+    const theta = (x / w) * twoPI * visualCycles + t * this.speed + this.phase;
 
     switch (this.waveType) {
 
@@ -459,34 +473,15 @@ export default class Layer {
   drawWave(centerY, t, isSelected) {
     if (this.muted) return; // capa silenciada → no dibujar
 
-    const w      = width;  // variable global de p5.js
-    const scaleY = this.amplitude * height * 0.35; // escala vertical de la onda
+    const w      = width;
+    const scaleY = this.amplitude * height * 0.10;
+    const alpha  = isSelected ? Math.min(this.opacity + 0.15, 1) : this.opacity;
 
-    // ── Primera pasada: halo de brillo fosforescente ─────────
-    if (this.glowIntensity > 0.05) {
-      drawingContext.save();
-      drawingContext.globalAlpha = this.opacity * 0.45 * this.glowIntensity;
-      drawingContext.shadowBlur  = 18 * this.glowIntensity;
-      drawingContext.shadowColor = this.color;
-      stroke(this.color);
-      strokeWeight((this.thickness + 4) * this.glowIntensity * 0.7);
-      noFill();
-      beginShape();
-      // Resolución reducida (cada 3px) para eficiencia en el halo
-      for (let x = 0; x < w; x += 3) {
-        vertex(x, centerY + this.sampleWave(x, w, t) * scaleY);
-      }
-      endShape();
-      drawingContext.restore();
-    }
-
-    // ── Segunda pasada: línea principal a resolución completa ─
     drawingContext.save();
-    drawingContext.globalAlpha  = this.opacity;
-    drawingContext.shadowBlur   = 7 * this.glowIntensity;
-    drawingContext.shadowColor  = this.color;
+    drawingContext.globalCompositeOperation = this.blendMode;
+    drawingContext.globalAlpha = alpha;
     stroke(this.color);
-    strokeWeight(isSelected ? this.thickness + 0.9 : this.thickness);
+    strokeWeight(1);
     noFill();
     beginShape();
     for (let x = 0; x < w; x++) {

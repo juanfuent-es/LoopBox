@@ -62,7 +62,7 @@ export function drawGrid() {
 
   // Marcadores de voltaje sobre el eje vertical izquierdo
   [1, 0.5, -0.5, -1].forEach((v) => {
-    const y = height / 2 - v * height * 0.18;
+    const y = height / 2 - v * height * 0.10;
     stroke("#0f250f");
     strokeWeight(0.5);
     line(0, y, 12, y);
@@ -135,16 +135,16 @@ export function drawCompositeWave(centerY, t) {
     }
   });
 
-  // Dibujar la onda suma con brillo fosforescente blanco intenso
+  // Onda compuesta: 1 px blanco semitransparente sobre todo lo demás
   drawingContext.save();
-  drawingContext.shadowBlur  = 22;
-  drawingContext.shadowColor = "rgba(255,255,255,0.85)";
+  drawingContext.globalCompositeOperation = "source-over";
+  drawingContext.globalAlpha = 0.55;
   stroke("#ffffff");
-  strokeWeight(2.0);
+  strokeWeight(1);
   noFill();
   beginShape();
   for (let x = 0; x < width; x++) {
-    vertex(x, centerY + sumWave[x] * height * 0.18);
+    vertex(x, centerY + sumWave[x] * height * 0.10);
   }
   endShape();
   drawingContext.restore();
